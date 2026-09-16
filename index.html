@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MVP Patentes Chile</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+body{margin:0;background:#0b0d10;color:#fff;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}main{max-width:800px;margin:auto;padding:14px}.wrap{position:relative;border-radius:16px;overflow:hidden;background:#111}video{width:100%;display:block}.hud{position:absolute;inset:0;pointer-events:none;border:2px solid #ffffff22}.status{position:absolute;top:10px;left:10px;background:#000a;padding:8px 10px;border-radius:10px;font-size:13px}.scan{position:absolute;left:5%;right:5%;top:35%;height:30%;border:1px dashed #ffffff88;border-radius:10px}.controls{display:flex;gap:8px;margin:12px 0}.controls button{flex:1;padding:13px;border:0;border-radius:12px;font-weight:700;font-size:16px}.primary{background:#fff;color:#111}.secondary{background:#242932;color:#fff}.card{background:#15191f;border-radius:14px;padding:12px;margin-top:10px}.plate{font:700 23px ui-monospace,SFMono-Regular,Menlo,monospace}.muted{color:#9da7b3;font-size:13px}.row{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #ffffff12;padding:9px 0}.ok{color:#8ce99a}.searching{color:#ffd43b}#debug{max-height:160px;overflow:auto;font-size:11px}canvas{display:none}
+</style></head>
+<body><main>
+<h2>MVP Patentes — LIVE</h2>
+<div class="wrap"><video id="v" autoplay playsinline muted></video><div class="hud"><div id="status" class="status">Detenido</div><div class="scan"></div></div></div>
+<div class="controls"><button id="start" class="primary">Iniciar cámara</button><button id="stop" class="secondary">Detener</button></div>
+<div class="card"><div><b>Patentes confirmadas</b> <span id="count" class="muted">0</span></div><div id="plates"></div></div>
+<div class="card"><b>Diagnóstico</b><div class="muted">V0.1: OCR local. No guarda fotos ni video. La zona punteada prioriza la región útil.</div><div id="debug"></div></div>
+<canvas id="c"></canvas>
+<script>
+const v=document.querySelector('#v'),c=document.querySelector('#c'),ctx=c.getContext('2d',{willReadFrequently:true});
+const statusEl=document.querySelector('#status'), platesEl=document.querySelector('#plates'), debugEl=document.querySelector('#debug');
+let stream=null,worker=null,running=false,busy=false,timer=null; const votes=new Map(), confirmed=new Map();
+const normalize=s=>s.toUpperCase().replace(/[^A-Z0-9]/g,'');
+function candidates(text){const raw=normalize(text); const out=[]; for(let i=0;i<=raw.length-6;i++){let x=raw.slice(i,i+6); if(/^[A-Z]{4}[0-9]{2}$/.test(x)||/^[A-Z]{2}[0-9]{4}$/.test(x)) out.push(x);} return [...new Set(out)];}
+function log(s){debugEl.innerHTML=`<div>${new Date().toLocaleTimeString()} ${s}</div>`+debugEl.innerHTML.slice(0,2500)}
+function render(){platesEl.innerHTML=''; [...confirmed.entries()].sort((a,b)=>b[1].votes-a[1].votes).forEach(([p,d])=>{platesEl.innerHTML+=`<div class="row"><span class="plate">${p}</span><span class="ok">✓ ${d.votes} lecturas</span></div>`}); document.querySelector('#count').textContent=confirmed.size;}
+async function initWorker(){statusEl.textContent='Cargando OCR…'; worker=await Tesseract.createWorker('eng',1,{logger:m=>{if(m.status==='recognizing text')statusEl.textContent=`OCR ${Math.round((m.progress||0)*100)}%`}}); await worker.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',preserve_interword_spaces:'0'});}
+async function scan(){if(!running||busy||!worker||v.readyState<2)return; busy=true; try{const W=v.videoWidth,H=v.videoHeight;if(!W)return; // process center/lower 70%, where road plates commonly appear
+ const sx=Math.floor(W*.05), sy=Math.floor(H*.25), sw=Math.floor(W*.90), sh=Math.floor(H*.65); const scale=Math.min(2.2,1400/sw); c.width=Math.floor(sw*scale);c.height=Math.floor(sh*scale);ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
+ const im=ctx.getImageData(0,0,c.width,c.height); const d=im.data; // grayscale + contrast threshold-ish preprocessing
+ for(let i=0;i<d.length;i+=4){const g=.299*d[i]+.587*d[i+1]+.114*d[i+2]; const z=g>145?255:g<70?0:Math.max(0,Math.min(255,(g-105)*2+128));d[i]=d[i+1]=d[i+2]=z;}ctx.putImageData(im,0,0);
+ const {data}=await worker.recognize(c); const cs=candidates(data.text||''); if(cs.length)log('candidatos: '+cs.join(', ')); cs.forEach(p=>{const n=(votes.get(p)||0)+1;votes.set(p,n);if(n>=2){confirmed.set(p,{votes:n,last:Date.now()});render();}}); statusEl.textContent=`Activo · ${confirmed.size} confirmadas`;
+ }catch(e){log('error: '+e.message)}finally{busy=false}}
+async function start(){if(running)return; try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30}},audio:false});v.srcObject=stream;await v.play();if(!worker)await initWorker();running=true;statusEl.textContent='Activo';timer=setInterval(scan,650);log(`cámara ${v.videoWidth}×${v.videoHeight}`);}catch(e){statusEl.textContent='Error de cámara';log(e.message)}}
+async function stop(){running=false;clearInterval(timer);if(stream)stream.getTracks().forEach(t=>t.stop());statusEl.textContent='Detenido'}
+document.querySelector('#start').onclick=start;document.querySelector('#stop').onclick=stop;
+</script></main></body></html>
